@@ -24,7 +24,9 @@ class EscalationService:
         msg_to_user = "I'm passing this over to our human support team. VIOLET will pause for now, and someone from our team will reply to you shortly."
         await self.whatsapp_client.send_text_message(to=phone_number, text=msg_to_user)
 
-        # 3. Alert the Team (Mock)
-        # TODO: Send email via SMTP
-        # TODO: Send message to internal WhatsApp Group
+        # 3. Alert the Team Admin
+        admin_number = "2347071149334"
+        admin_msg = f"🚨 *HUMAN ESCALATION REQUEST*\n\nUser Phone: {phone_number}\nConversation ID: {conversation_id}\n\nPlease review this chat in the admin dashboard and follow up."
+        await self.whatsapp_client.send_text_message(to=admin_number, text=admin_msg)
+
         logger.warning(f"ESCALATION TRIGGERED: Conversation {conversation_id} for user {phone_number} needs human attention!")
