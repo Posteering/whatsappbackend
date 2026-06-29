@@ -24,12 +24,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Create all database tables on startup (safe to run repeatedly)
-Base.metadata.create_all(bind=engine)
+@app.on_event("startup")
+async def startup_event():
+    # Create all database tables on startup (safe to run repeatedly)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        print(f"Warning: Could not create database tables: {e}")
 
 app.include_router(webhooks_router, prefix="/api/v1/webhooks", tags=["webhooks"])
 app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
 app.include_router(vendor_router, prefix="/api/v1/vendor", tags=["vendor"])
+
 
 @app.get("/")
 def root():
