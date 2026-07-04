@@ -24,7 +24,179 @@ class ConversationService:
         self.payment = PaymentService(db)
         self.escalation = EscalationService(db)
 
+    async def send_vendor_menu(self, phone_number: str, vendor):
+        """Send the vendor-specific dashboard menu."""
+        sections = [
+            {
+                "title": "Order Management",
+                "rows": [
+                    {"id": "VENDOR_VIEW_ORDERS", "title": "📋 Pending Orders"},
+                    {"id": "VENDOR_VIEW_HISTORY", "title": "📜 Order History"},
+                ]
+            },
+            {
+                "title": "Menu Management",
+                "rows": [
+                    {"id": "VENDOR_ADD_ITEM", "title": "➕ Add Menu Item"},
+                    {"id": "VENDOR_VIEW_MENU", "title": "📖 View My Menu"},
+                ]
+            },
+            {
+                "title": "Support",
+                "rows": [
+                    {"id": "SPEAK_HUMAN", "title": "🧑 Speak to Human"},
+                ]
+            }
+        ]
+        await self.whatsapp_client.send_interactive_list(
+            to=phone_number,
+            text=f"👋 Welcome back, *{vendor.name}*!\n\nWhat would you like to do today?",
+            button_text="Vendor Menu",
+            sections=sections
+        )
+
+    async def send_rider_menu(self, phone_number: str, rider):
+        """Send the rider-specific dashboard menu."""
+        status = "🟢 Available" if rider.is_available else "🔴 Unavailable"
+        toggle_text = "Set Unavailable" if rider.is_available else "Set Available"
+        toggle_id = "RIDER_SET_UNAVAILABLE" if rider.is_available else "RIDER_SET_AVAILABLE"
+        sections = [
+            {
+                "title": "My Status",
+                "rows": [
+                    {"id": toggle_id, "title": f"🔄 {toggle_text}"},
+                ]
+            },
+            {
+                "title": "Support",
+                "rows": [
+                    {"id": "SPEAK_HUMAN", "title": "🧑 Speak to Human"},
+                ]
+            }
+        ]
+        await self.whatsapp_client.send_interactive_list(
+            to=phone_number,
+            text=f"👋 Welcome back, *{rider.name}*!\n\nCurrent Status: {status}\n\nWhat would you like to do?",
+            button_text="Rider Menu",
+            sections=sections
+        )
+
+    async def handle_vendor_message(self, phone_number: str, message_text: str, vendor):
+        """Handle all messages from registered vendors."""
+        from app.models.commerce import Order, MenuItem
+
+        btn_match = re.search(r'\[INTERACTIVE_BTN:\s*(.+?)\]', message_text)
+        if btn_match:
+            btn_id = btn_match.group(1).strip()
+
+            if btn_id == "VENDOR_VIEW_ORDERS":
+                pending = self.db.query(Order).filter(
+                    Order.vendor_id == str(vendor.id),
+                    Order.vendor_status == "pending"
+                ).order_by(Order.created_at.desc()).limit(5).all()
+                if pending:
+                    msg = f"📋 *Pending Orders ({len(pending)}):*\n\n"
+                    for o in pending:
+                        customer = self.db.query(User).filter(User.id == o.user_id).first()
+                        msg += f"• Order #{str(o.id)[:8]} — ₦{o.total_amount:,.0f} — {customer.name if customer else 'Customer'}\n"
+                    await self.whatsapp_client.send_text_message(to=phone_number, text=msg)
+                else:
+                    await self.whatsapp_client.send_text_message(to=phone_number, text="✅ You have no pending orders right now.")
+                return await self.send_vendor_menu(phone_number, vendor)
+
+            elif btn_id == "VENDOR_VIEW_HISTORY":
+                recent = self.db.query(Order).filter(
+                    Order.vendor_id == str(vendor.id)
+                ).order_by(Order.created_at.desc()).limit(5).all()
+                if recent:
+                    msg = "📜 *Recent Orders:*\n\n"
+                    for o in recent:
+                        msg += f"• Order #{str(o.id)[:8]} — ₦{o.total_amount:,.0f} — {o.status}\n"
+                    await self.whatsapp_client.send_text_message(to=phone_number, text=msg)
+                else:
+                    await self.whatsapp_client.send_text_message(to=phone_number, text="No orders yet.")
+                return await self.send_vendor_menu(phone_number, vendor)
+
+            elif btn_id == "VENDOR_ADD_ITEM":
+                await self.whatsapp_client.send_text_message(
+                    to=phone_number,
+                    text="➕ To add a menu item, send a message in this format:\n\n*Add item: [name], [price], [description]*\n\nExample:\n_Add item: Jollof Rice, 1500, Delicious party jollof with chicken_"
+                )
+                return
+
+            elif btn_id == "VENDOR_VIEW_MENU":
+                items = self.db.query(MenuItem).filter(MenuItem.vendor_id == str(vendor.id)).all()
+                if items:
+                    msg = f"📖 *Your Menu ({len(items)} items):*\n\n"
+                    for item in items:
+                        msg += f"• *{item.name}* — ₦{item.price:,.0f}\n  _{item.description}_\n\n"
+                    await self.whatsapp_client.send_text_message(to=phone_number, text=msg)
+                else:
+                    await self.whatsapp_client.send_text_message(to=phone_number, text="Your menu is empty. Use '➕ Add Menu Item' to get started!")
+                return await self.send_vendor_menu(phone_number, vendor)
+
+            elif btn_id == "SPEAK_HUMAN":
+                user, _ = await self.onboarding.handle_user_greeting(phone_number)
+                conversation = self.db.query(Conversation).filter(
+                    Conversation.user_id == user.id, Conversation.status == "active"
+                ).first()
+                if not conversation:
+                    conversation = Conversation(user_id=user.id)
+                    self.db.add(conversation)
+                    self.db.commit()
+                return await self.escalation.escalate_to_human(conversation.id, phone_number)
+
+        # Any other text message from vendor → show vendor menu
+        return await self.send_vendor_menu(phone_number, vendor)
+
+    async def handle_rider_message(self, phone_number: str, message_text: str, rider):
+        """Handle all messages from registered dispatch riders."""
+        btn_match = re.search(r'\[INTERACTIVE_BTN:\s*(.+?)\]', message_text)
+        if btn_match:
+            btn_id = btn_match.group(1).strip()
+
+            if btn_id == "RIDER_SET_AVAILABLE":
+                rider.is_available = True
+                self.db.commit()
+                await self.whatsapp_client.send_text_message(to=phone_number, text="🟢 You are now *Available*. Customers can now find you!")
+                return await self.send_rider_menu(phone_number, rider)
+
+            elif btn_id == "RIDER_SET_UNAVAILABLE":
+                rider.is_available = False
+                self.db.commit()
+                await self.whatsapp_client.send_text_message(to=phone_number, text="🔴 You are now *Unavailable*.")
+                return await self.send_rider_menu(phone_number, rider)
+
+            elif btn_id == "SPEAK_HUMAN":
+                user, _ = await self.onboarding.handle_user_greeting(phone_number)
+                conversation = self.db.query(Conversation).filter(
+                    Conversation.user_id == user.id, Conversation.status == "active"
+                ).first()
+                if not conversation:
+                    conversation = Conversation(user_id=user.id)
+                    self.db.add(conversation)
+                    self.db.commit()
+                return await self.escalation.escalate_to_human(conversation.id, phone_number)
+
+        # Any other text message from rider → show rider menu
+        return await self.send_rider_menu(phone_number, rider)
+
     async def process_incoming_message(self, phone_number: str, message_text: str):
+        # 0. Role-based routing — vendors and riders get their own menus.
+        # Order management buttons (Accept/Decline/Complete) bypass this and use existing logic.
+        btn_match_early = re.search(r'\[INTERACTIVE_BTN:\s*(.+?)\]', message_text)
+        is_order_button = btn_match_early and any(
+            btn_match_early.group(1).strip().startswith(p)
+            for p in ["ACCEPT_ORDER_", "DECLINE_ORDER_", "COMPLETE_ORDER_", "RATE_VENDOR_"]
+        )
+        if not is_order_button:
+            vendor_check = self.db.query(Vendor).filter(Vendor.contact_phone == phone_number).first()
+            if vendor_check:
+                return await self.handle_vendor_message(phone_number, message_text, vendor_check)
+            rider_check = self.db.query(DispatchRider).filter(DispatchRider.phone_number == phone_number).first()
+            if rider_check:
+                return await self.handle_rider_message(phone_number, message_text, rider_check)
+
         # 1. Onboarding
         user, is_new = await self.onboarding.handle_user_greeting(phone_number)
         if is_new:
