@@ -1,15 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func
 from app.database.session import get_db
 from app.models.user import User
 from app.models.analytics import Analytics
+from app.core.config import settings
 from typing import List
 
-router = APIRouter()
+def verify_admin_api_key(x_admin_key: str = Header(...)):
+    if x_admin_key != settings.ADMIN_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid admin API key")
+    return x_admin_key
 
-# Note: Add JWT authentication dependency here in a real scenario
-# e.g., @router.get("/users", dependencies=[Depends(verify_admin_jwt)])
+router = APIRouter(dependencies=[Depends(verify_admin_api_key)])
 
 @router.get("/users")
 def list_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):

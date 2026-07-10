@@ -1,6 +1,6 @@
-# 🤖 Devon — WhatsApp AI Secretary Bot
+# 🤖 VIOLET — WhatsApp AI Assistant
 
-A production-ready, fully automated WhatsApp AI assistant for **Easy Eat**, a food delivery business. Devon handles customer conversations, processes orders, generates payment links, and escalates to human agents — all through WhatsApp.
+A production-ready, fully automated WhatsApp AI assistant that orchestrates a full vendor marketplace ecosystem. VIOLET handles customer conversations, processes orders, manages a multi-vendor marketplace, assigns dispatch riders, and handles complex payment flows via Posteering (Ledger & Escrow) — all through WhatsApp.
 
 ---
 
@@ -16,14 +16,13 @@ A production-ready, fully automated WhatsApp AI assistant for **Easy Eat**, a fo
 - [Deployment](#deployment)
 - [API Endpoints](#api-endpoints)
 - [How It Works](#how-it-works)
-- [Updating API Keys](#updating-api-keys)
 - [Troubleshooting](#troubleshooting)
 
 ---
 
 ## Overview
 
-Devon is a WhatsApp bot that integrates the **Meta WhatsApp Cloud API** with **Anthropic Claude** to deliver intelligent, context-aware responses to customers. It is designed to run 24/7, handling everything from greeting new users to generating payment invoices automatically.
+VIOLET is a WhatsApp bot that integrates the **Meta WhatsApp Cloud API** with **Anthropic Claude** to deliver intelligent, context-aware responses to customers. It features role-based routing to support Customers, Vendors, and Dispatch Riders. VIOLET utilizes **Posteering** to automatically generate FBO virtual accounts, handle payments securely in escrow, and disburse funds seamlessly to vendor ledgers.
 
 ---
 
@@ -32,13 +31,13 @@ Devon is a WhatsApp bot that integrates the **Meta WhatsApp Cloud API** with **A
 | Feature | Description |
 |---|---|
 | 🧠 **AI Responses** | Powered by Claude (`claude-sonnet-4-5`) for natural, context-aware replies |
-| 👤 **Auto Onboarding** | Automatically detects new users and collects their name |
-| 💬 **Conversation Memory** | Maintains the last 10 messages of context per user |
-| 💳 **Payment Link Generation** | AI triggers automatic payment link creation when a customer is ready to pay |
-| ⏰ **Payment Reminders** | Sends automatic WhatsApp follow-ups for pending payments older than 24 hours |
+| 👥 **Multi-role Support** | Seamlessly switches between Customer, Vendor, and Rider modes |
+| 🏬 **Vendor Marketplace** | Customers can browse vendors, and vendors can manage their menus |
+| 🛵 **Dispatch Riders** | Auto-assignment or manual pairing of delivery riders |
+| 💳 **Posteering Integration** | Generates payment links via Posteering One API and monitors FBO callbacks |
+| 🏦 **Ledger Escrow System** | Funds are held securely until order completion, then disbursed to vendor accounts |
 | 🙋 **Human Escalation** | Detects frustration or explicit requests and flags conversations for human agents |
-| 🌍 **Multilingual** | Replies in the same language the user writes in |
-| 🔒 **Webhook Security** | Validates all incoming Meta webhooks with HMAC-SHA256 signature verification |
+| 🔒 **Webhook Security** | Validates incoming Meta and Posteering webhooks via HMAC-SHA256 |
 
 ---
 
@@ -183,48 +182,74 @@ SECRET_KEY=your_random_secret_key
 ## 🚀 Local Setup
 
 ### Prerequisites
-- Docker Desktop (running)
-- ngrok account (free tier is fine)
+- Python 3.12+
+- Node.js 18+
+- A running PostgreSQL database (e.g. Railway)
+- A running Redis instance (e.g. Railway)
 - Meta Developer account with a WhatsApp app
 - Anthropic account with API credits
+- Posteering sandbox account (https://app.posteering.com)
 
 ### Steps
 
-**1. Clone the repo and create your `.env` file:**
+**1. Clone the repo:**
+```bash
+git clone https://github.com/your-fork/violet-bot.git
+cd violet-bot
+```
+
+**2. Create your backend `.env`:**
 ```bash
 cp .env.example .env
-# Fill in all the values
+# Open .env and fill in ALL the values — see the comments inside
 ```
 
-**2. Start all containers:**
+**3. Install Python dependencies & run migrations:**
 ```bash
-docker compose up --build -d
+python -m venv venv
+venv\Scripts\activate          # Windows
+# source venv/bin/activate     # macOS/Linux
+
+pip install -r requirements.txt
+python -m alembic upgrade head
 ```
 
-This starts 3 services:
-- `web` — FastAPI server on port 8000
-- `worker` — Celery background worker
-- `beat` — Celery periodic task scheduler
+**4. Seed the database with a test vendor:**
+```bash
+python seed.py
+# This prints a Vendor ID + phone number — save them for step 9
+```
 
-**3. Expose your local server to the internet:**
+**5. Start the backend server:**
+```bash
+uvicorn app.main:app --reload --port 8000
+```
+
+**6. Set up the frontend:**
+```bash
+cd frontend
+cp .env.example .env
+# VITE_API_BASE=http://localhost:8000/api/v1  (default is fine for local dev)
+npm install
+npm run dev
+```
+
+**7. Expose your local server to the internet (for WhatsApp webhooks):**
 ```bash
 ngrok http 8000
 ```
 Copy the generated `https://` URL.
 
-**4. Configure the Meta Webhook:**
+**8. Configure the Meta Webhook:**
 - Go to Meta Developer Dashboard → WhatsApp → Configuration
-- Set Callback URL to: `https://your-ngrok-url.ngrok-free.app/api/v1/webhooks/whatsapp`
-- Set Verify Token to the value you put in `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
-- Click **Verify and Save**
+- Set Callback URL to: `https://your-ngrok-url/api/v1/webhooks/whatsapp`
+- Set Verify Token to `WHATSAPP_WEBHOOK_VERIFY_TOKEN` from your `.env`
 - Subscribe to the `messages` webhook field
 
-**5. Add your phone number as a test recipient:**
-- Go to WhatsApp → API Setup
-- Under "To", add and verify your personal phone number
-
-**6. Test it:**
-Send a WhatsApp message to your bot number. You should receive a reply from Devon!
+**9. Log in to the vendor dashboard:**
+- Open the frontend in your browser (usually `http://localhost:5173`)
+- Go to **Login**
+- Enter the **Vendor ID** and **phone number** printed by `seed.py`
 
 ---
 

@@ -22,6 +22,13 @@ class Vendor(Base):
     contact_phone = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     rating = Column(Float, default=0.0)
+    ledger_account_id = Column(String, nullable=True)  # Posteering ledger account ID
+    # Bankrail FBO Virtual Account
+    virtual_account_number = Column(String, nullable=True)   # e.g. 9212652493
+    virtual_account_bank = Column(String, nullable=True)     # bank name (e.g. Providus)
+    virtual_account_bank_code = Column(String, nullable=True) # e.g. 101
+    virtual_account_provider = Column(String, nullable=True) # e.g. providus
+    virtual_account_tracking_id = Column(String, nullable=True) # Posteering trackingId
 
 class MenuItem(Base):
     __tablename__ = "menu_items"

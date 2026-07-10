@@ -36,6 +36,12 @@ def vendor_login(req: VendorLoginRequest, db: Session = Depends(get_db)):
         "owner_name": owner_name,
         "location": vendor.location,
         "rating": vendor.rating,
+        "payment_account": {
+            "bank": vendor.virtual_account_bank or "Providus Bank",
+            "account_number": vendor.virtual_account_number,
+            "account_name": vendor.name,
+            "bank_code": vendor.virtual_account_bank_code,
+        } if vendor.virtual_account_number else None,
     }
 
 class AddMenuItemRequest(BaseModel):
@@ -43,6 +49,63 @@ class AddMenuItemRequest(BaseModel):
     price: float
     description: str | None = None
     image_url: str | None = None
+
+@router.get("/{vendor_id}/profile")
+def get_vendor_profile(vendor_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Return full vendor profile including payment account details for the dashboard."""
+    vendor = db.query(Vendor).filter(Vendor.id == vendor_id).first()
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+
+    user = db.query(User).filter(User.phone_number == vendor.contact_phone).first()
+    owner_name = user.name if user and user.name else None
+
+    return {
+        "vendor_id": str(vendor.id),
+        "vendor_name": vendor.name,
+        "owner_name": owner_name,
+        "location": vendor.location,
+        "description": vendor.description,
+        "rating": vendor.rating,
+        "contact_phone": vendor.contact_phone,
+        "payment_account": {
+            "bank": vendor.virtual_account_bank or "Providus Bank",
+            "account_number": vendor.virtual_account_number,
+            "account_name": vendor.name,
+            "bank_code": vendor.virtual_account_bank_code,
+            "provider": vendor.virtual_account_provider,
+            "tracking_id": vendor.virtual_account_tracking_id,
+        } if vendor.virtual_account_number else None,
+    }
+
+@router.get("/{vendor_id}/balance")
+def get_vendor_balance(vendor_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Fetch vendor's ledger balance from Posteering."""
+    from app.services.posteering_client import posteering_client
+    vendor = db.query(Vendor).filter(Vendor.id == vendor_id).first()
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+
+    balance_ngn = 0.0
+    if vendor.ledger_account_id:
+        bal_data, err = posteering_client.ledger_get_balance(vendor.ledger_account_id, "NGN")
+        if not err and bal_data:
+            # Posteering returns amount in kobo (smallest unit)
+            balance_ngn = (bal_data.get("available_balance") or bal_data.get("balance") or 0) / 100
+
+    return {
+        "vendor_id": str(vendor.id),
+        "vendor_name": vendor.name,
+        "ledger_account_id": vendor.ledger_account_id,
+        "balance_ngn": balance_ngn,
+        "payment_account": {
+            "bank": vendor.virtual_account_bank or "Providus Bank",
+            "account_number": vendor.virtual_account_number,
+            "account_name": vendor.name,
+            "bank_code": vendor.virtual_account_bank_code,
+        } if vendor.virtual_account_number else None,
+    }
+
 
 @router.post("/{vendor_id}/catalog")
 def add_catalog_item(vendor_id: uuid.UUID, req: AddMenuItemRequest, db: Session = Depends(get_db)):

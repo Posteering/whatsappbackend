@@ -8,7 +8,7 @@ class AIAssistant:
     def __init__(self):
         # Use the synchronous client since Celery workers run in sync context
         self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        self.default_model = "claude-sonnet-4-5"
+        self.default_model = "claude-haiku-4-5-20251001"
 
     async def generate_response(self, system_prompt: str, user_message: str, context: list = None) -> str:
         messages = []

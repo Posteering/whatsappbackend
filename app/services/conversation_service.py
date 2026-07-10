@@ -1,6 +1,9 @@
 import logging
 import re
+import redis
+import json
 from sqlalchemy.orm import Session
+from app.core.config import settings
 from app.models.user import User
 from app.models.conversation import Conversation
 from app.models.message import Message
@@ -14,7 +17,7 @@ from app.services.escalation_service import EscalationService
 from app.whatsapp.client import WhatsAppClient
 
 logger = logging.getLogger(__name__)
-
+redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
 class ConversationService:
     def __init__(self, db: Session):
         self.db = db
@@ -24,27 +27,72 @@ class ConversationService:
         self.payment = PaymentService(db)
         self.escalation = EscalationService(db)
 
+    async def send_main_menu(self, phone_number: str):
+        """Send the main customer menu."""
+        vendor_check = self.db.query(Vendor).filter(Vendor.contact_phone == phone_number).first()
+        rider_check = self.db.query(DispatchRider).filter(DispatchRider.phone_number == phone_number).first()
+
+        support_rows = [{"id": "SPEAK_HUMAN", "title": "Speak to Human"}]
+        if vendor_check:
+            support_rows.append({"id": "SWITCH_VENDOR_MENU", "title": "Vendor Menu"})
+        elif rider_check:
+            support_rows.append({"id": "SWITCH_RIDER_MENU", "title": "Rider Menu"})
+
+        sections = [
+            {
+                "title": "Customer Services",
+                "rows": [
+                    {"id": "FIND_DISPATCH", "title": "Find Dispatch Rider"},
+                    {"id": "FIND_VENDOR", "title": "Find Vendor"}
+                ]
+            },
+            {
+                "title": "Vendor / Rider Hub",
+                "rows": [
+                    {"id": "REGISTER_VENDOR", "title": "Register Vendor"},
+                    {"id": "REGISTER_RIDER", "title": "Register Dispatch Rider"}
+                ]
+            },
+            {
+                "title": "Support",
+                "rows": support_rows
+            }
+        ]
+        await self.whatsapp_client.send_interactive_list(
+            to=phone_number,
+            text="How can I help you today? Please choose an option below:",
+            button_text="Main Menu",
+            sections=sections
+        )
+
     async def send_vendor_menu(self, phone_number: str, vendor):
         """Send the vendor-specific dashboard menu."""
         sections = [
             {
                 "title": "Order Management",
                 "rows": [
-                    {"id": "VENDOR_VIEW_ORDERS", "title": "📋 Pending Orders"},
-                    {"id": "VENDOR_VIEW_HISTORY", "title": "📜 Order History"},
+                    {"id": "VENDOR_VIEW_ORDERS", "title": "Pending Orders"},
+                    {"id": "VENDOR_VIEW_HISTORY", "title": "Order History"},
                 ]
             },
             {
                 "title": "Menu Management",
                 "rows": [
-                    {"id": "VENDOR_ADD_ITEM", "title": "➕ Add Menu Item"},
-                    {"id": "VENDOR_VIEW_MENU", "title": "📖 View My Menu"},
+                    {"id": "VENDOR_ADD_ITEM", "title": "Add Menu Item"},
+                    {"id": "VENDOR_VIEW_MENU", "title": "View My Menu"},
                 ]
             },
             {
-                "title": "Support",
+                "title": "Wallet & Ledger",
                 "rows": [
-                    {"id": "SPEAK_HUMAN", "title": "🧑 Speak to Human"},
+                    {"id": "VENDOR_VIEW_BALANCE", "title": "View Balance"},
+                ]
+            },
+            {
+                "title": "Support & Options",
+                "rows": [
+                    {"id": "SWITCH_MAIN_MENU", "title": "Customer Menu"},
+                    {"id": "SPEAK_HUMAN", "title": "Speak to Human"},
                 ]
             }
         ]
@@ -64,13 +112,14 @@ class ConversationService:
             {
                 "title": "My Status",
                 "rows": [
-                    {"id": toggle_id, "title": f"🔄 {toggle_text}"},
+                    {"id": toggle_id, "title": f"{toggle_text}"},
                 ]
             },
             {
-                "title": "Support",
+                "title": "Support & Options",
                 "rows": [
-                    {"id": "SPEAK_HUMAN", "title": "🧑 Speak to Human"},
+                    {"id": "SWITCH_MAIN_MENU", "title": "Customer Menu"},
+                    {"id": "SPEAK_HUMAN", "title": "Speak to Human"},
                 ]
             }
         ]
@@ -135,6 +184,46 @@ class ConversationService:
                     await self.whatsapp_client.send_text_message(to=phone_number, text="Your menu is empty. Use '➕ Add Menu Item' to get started!")
                 return await self.send_vendor_menu(phone_number, vendor)
 
+            elif btn_id == "VENDOR_VIEW_BALANCE":
+                if not vendor.ledger_account_id:
+                    await self.whatsapp_client.send_text_message(to=phone_number, text="Your Ledger account is not set up. Please contact support.")
+                else:
+                    from app.services.posteering_client import posteering_client
+                    bal_data, bal_err = posteering_client.ledger_get_balance(vendor.ledger_account_id, "NGN")
+                    
+                    if bal_err and str(vendor.ledger_account_id).startswith("mock_"):
+                        bal_err = None
+                        bal_data = {"balance": 1500000} # 15k NGN
+
+                    if bal_err:
+                        await self.whatsapp_client.send_text_message(to=phone_number, text="⚠️ Could not retrieve balance at this time.")
+                    else:
+                        balance_kobo = bal_data.get("balance", 0)
+                        balance_ngn = balance_kobo / 100.0
+                        
+                        # Get recent transactions
+                        txn_data, txn_err = posteering_client.ledger_list_transactions(vendor.ledger_account_id, limit=3)
+                        
+                        if txn_err and str(vendor.ledger_account_id).startswith("mock_"):
+                            txn_data = {
+                                "data": [
+                                    {"amount": 1500000, "type": "credit", "description": "Escrow Payout for Order #8347"}
+                                ]
+                            }
+                        
+                        recent_msg = ""
+                        if txn_data and "data" in txn_data and txn_data["data"]:
+                            recent_msg = "\n\n*Recent Transactions:*\n"
+                            for t in txn_data["data"]:
+                                amt = t.get("amount", 0) / 100.0
+                                typ = "🟢 IN" if t.get("type") == "credit" else "🔴 OUT"
+                                desc = t.get("description", "Transfer")
+                                recent_msg += f"• {typ}: ₦{amt:,.2f} - {desc}\n"
+                                
+                        msg = f"💰 *Your Wallet Balance*\n\nAvailable: *₦{balance_ngn:,.2f}*{recent_msg}"
+                        await self.whatsapp_client.send_text_message(to=phone_number, text=msg)
+                return await self.send_vendor_menu(phone_number, vendor)
+
             elif btn_id == "SPEAK_HUMAN":
                 user, _ = await self.onboarding.handle_user_greeting(phone_number)
                 conversation = self.db.query(Conversation).filter(
@@ -145,6 +234,9 @@ class ConversationService:
                     self.db.add(conversation)
                     self.db.commit()
                 return await self.escalation.escalate_to_human(conversation.id, phone_number)
+                
+            elif btn_id == "SWITCH_MAIN_MENU":
+                return await self.send_main_menu(phone_number)
 
         # Any other text message from vendor → show vendor menu
         return await self.send_vendor_menu(phone_number, vendor)
@@ -178,18 +270,31 @@ class ConversationService:
                     self.db.commit()
                 return await self.escalation.escalate_to_human(conversation.id, phone_number)
 
+            elif btn_id == "SWITCH_MAIN_MENU":
+                return await self.send_main_menu(phone_number)
+
         # Any other text message from rider → show rider menu
         return await self.send_rider_menu(phone_number, rider)
 
     async def process_incoming_message(self, phone_number: str, message_text: str):
         # 0. Role-based routing — vendors and riders get their own menus.
-        # Order management buttons (Accept/Decline/Complete) bypass this and use existing logic.
+        # Order management buttons and Customer Main Menu buttons bypass this to use existing AI logic.
         btn_match_early = re.search(r'\[INTERACTIVE_BTN:\s*(.+?)\]', message_text)
+        
+        if btn_match_early:
+            early_id = btn_match_early.group(1).strip()
+            if early_id == "SWITCH_MAIN_MENU":
+                redis_client.setex(f"user_mode:{phone_number}", 6 * 3600, "customer")
+            elif early_id in ("SWITCH_VENDOR_MENU", "SWITCH_RIDER_MENU"):
+                redis_client.delete(f"user_mode:{phone_number}")
+                
+        current_mode = redis_client.get(f"user_mode:{phone_number}")
+        
         is_order_button = btn_match_early and any(
             btn_match_early.group(1).strip().startswith(p)
-            for p in ["ACCEPT_ORDER_", "DECLINE_ORDER_", "COMPLETE_ORDER_", "RATE_VENDOR_"]
+            for p in ["ACCEPT_ORDER_", "DECLINE_ORDER_", "COMPLETE_ORDER_", "RATE_VENDOR_", "FIND_DISPATCH", "FIND_VENDOR", "REGISTER_VENDOR", "REGISTER_RIDER", "SWITCH_VENDOR_MENU", "SWITCH_RIDER_MENU"]
         )
-        if not is_order_button:
+        if not is_order_button and current_mode != "customer":
             vendor_check = self.db.query(Vendor).filter(Vendor.contact_phone == phone_number).first()
             if vendor_check:
                 return await self.handle_vendor_message(phone_number, message_text, vendor_check)
@@ -201,6 +306,15 @@ class ConversationService:
         user, is_new = await self.onboarding.handle_user_greeting(phone_number)
         if is_new:
             return # Wait for their response with name
+
+        if not user.name:
+            user.name = message_text.strip()
+            self.db.commit()
+            await self.whatsapp_client.send_text_message(
+                to=phone_number,
+                text=f"Nice to meet you, {user.name}! How can I help you today?"
+            )
+            return
 
         # 2. Get active conversation
         conversation = self.db.query(Conversation).filter(
@@ -240,7 +354,35 @@ class ConversationService:
         btn_match = re.search(r'\[INTERACTIVE_BTN:\s*(.+?)\]', message_text)
         if btn_match:
             btn_id = btn_match.group(1).strip()
-            
+
+            # ── Main customer menu buttons → translate to natural language for AI ──
+            if btn_id == "FIND_VENDOR":
+                ai_input_text = "I want to find a vendor/restaurant. Please ask me for the category and my location."
+            elif btn_id == "FIND_DISPATCH":
+                ai_input_text = "I need a dispatch rider. Please ask me for my location."
+            elif btn_id == "REGISTER_VENDOR":
+                ai_input_text = "I want to register as a vendor on this platform. Please guide me through the registration process."
+            elif btn_id == "REGISTER_RIDER":
+                ai_input_text = "I want to register as a dispatch rider. Please guide me through the registration."
+            elif btn_id == "SPEAK_HUMAN":
+                # Handle escalation directly
+                conversation = self.db.query(Conversation).filter(
+                    Conversation.user_id == user.id, Conversation.status == "active"
+                ).first()
+                if not conversation:
+                    conversation = Conversation(user_id=user.id)
+                    self.db.add(conversation)
+                    self.db.commit()
+                return await self.escalation.escalate_to_human(conversation.id, phone_number)
+            elif btn_id == "SWITCH_VENDOR_MENU":
+                vendor = self.db.query(Vendor).filter(Vendor.contact_phone == phone_number).first()
+                if vendor:
+                    return await self.send_vendor_menu(phone_number, vendor)
+            elif btn_id == "SWITCH_RIDER_MENU":
+                rider = self.db.query(DispatchRider).filter(DispatchRider.phone_number == phone_number).first()
+                if rider:
+                    return await self.send_rider_menu(phone_number, rider)
+
             if btn_id.startswith("SELECT_VENDOR_"):
                 v_id = btn_id.replace("SELECT_VENDOR_", "")
                 vendor = self.db.query(Vendor).filter(Vendor.id == v_id).first()
@@ -261,11 +403,15 @@ class ConversationService:
                     self.db.commit()
                     # Send Payment Link to Customer
                     customer = self.db.query(User).filter(User.id == order.user_id).first()
-                    invoice = await self.payment.create_invoice(order.id, order.total_amount)
-                    vacct = await self.payment.create_virtual_account(invoice.id)
-                    payment_msg = f"✅ *Your order has been accepted by the vendor!*\n\n*Invoice: #{invoice.invoice_number}*\nTotal: ₦{order.total_amount}\n\nPlease transfer exactly ₦{order.total_amount} to:\nBank: {vacct.bank_name}\nAccount: {vacct.account_number}\nName: {vacct.account_name}\n\nThis account expires in 30 minutes."
-                    await self.whatsapp_client.send_text_message(to=customer.phone_number, text=payment_msg)
-                    return await self.whatsapp_client.send_text_message(to=phone_number, text="✅ You have accepted the order. We have sent the invoice to the customer.")
+                    if customer:
+                        await self.payment.generate_payment_link(
+                            user_id=customer.id,
+                            phone_number=customer.phone_number,
+                            amount=order.total_amount,
+                            order_id=order.id,
+                            description=f"Order #{str(order.id)[:8]}"
+                        )
+                    return await self.whatsapp_client.send_text_message(to=phone_number, text="✅ You have accepted the order. The payment details have been sent to the customer.")
                 else:
                     return await self.whatsapp_client.send_text_message(to=phone_number, text="⚠️ This order has already been processed or does not exist.")
 
@@ -287,6 +433,27 @@ class ConversationService:
                 if order and order.status == "paid":
                     order.status = "completed"
                     self.db.commit()
+                    
+                    # Release Escrow Funds to Vendor Ledger
+                    vendor = self.db.query(Vendor).filter(Vendor.id == order.vendor_id).first()
+                    if vendor and vendor.ledger_account_id:
+                        from app.core.config import settings
+                        from app.services.posteering_client import posteering_client
+                        escrow_ledger_id = settings.ESCROW_LEDGER_ACCOUNT_ID
+                        if escrow_ledger_id:
+                            # Transfer funds
+                            trans_data, trans_err = posteering_client.ledger_transfer(
+                                from_account_id=escrow_ledger_id,
+                                to_account_id=vendor.ledger_account_id,
+                                amount_ngn=float(order.total_amount),
+                                reference=f"escrow_release_order_{order.id}",
+                                description=f"Payout for Order {order.id}"
+                            )
+                            if trans_err:
+                                logger.error(f"Failed to release escrow for order {order.id}: {trans_err}")
+                            else:
+                                logger.info(f"Released escrow NGN {order.total_amount} to Vendor {vendor.id} (Order {order.id})")
+                    
                     customer = self.db.query(User).filter(User.id == order.user_id).first()
                     sections = [
                         {
@@ -380,11 +547,72 @@ class ConversationService:
                 v_category = register_vendor_match.group(2).strip()
                 v_location = register_vendor_match.group(3).strip()
                 v_desc = register_vendor_match.group(4).strip()
-                new_vendor = Vendor(name=v_name, location=v_location, description=v_desc, contact_phone=phone_number, rating=5.0)
+                
+                # Provision Ledger Account on Posteering
+                from app.services.posteering_client import posteering_client
+                ledger_id = None
+                acc_data, err = posteering_client.ledger_create_account(
+                    account_class="asset",
+                    currencies=["NGN"],
+                    reference=f"vendor_{phone_number.lstrip('+')}",
+                    metadata={"vendor_name": v_name, "category": v_category}
+                )
+                if not err and acc_data:
+                    ledger_id = acc_data.get("id")
+
+                # Provision Bankrail FBO Virtual Account (Providus)
+                va_number = None
+                va_bank_code = None
+                va_provider = None
+                va_tracking_id = None
+                va_ref = f"vendor_{phone_number.lstrip('+')}"
+                va_data, va_err = posteering_client.create_virtual_account(reference=va_ref)
+                if not va_err and va_data:
+                    va_number = va_data.get("virtualAccount")
+                    va_bank_code = va_data.get("bankCode")
+                    va_provider = va_data.get("provider", "providus").title()
+                    va_tracking_id = va_data.get("trackingId")
+                    logger.info(f"FBO account provisioned for {v_name}: {va_number}")
+                else:
+                    logger.error(f"FBO provisioning failed for {v_name}: {va_err}")
+
+                new_vendor = Vendor(
+                    name=v_name,
+                    location=v_location,
+                    description=v_desc,
+                    contact_phone=phone_number,
+                    rating=5.0,
+                    ledger_account_id=ledger_id,
+                    virtual_account_number=va_number,
+                    virtual_account_bank_code=va_bank_code,
+                    virtual_account_bank="Providus Bank" if va_provider else None,
+                    virtual_account_provider=va_provider,
+                    virtual_account_tracking_id=va_tracking_id,
+                )
                 self.db.add(new_vendor)
                 self.db.commit()
                 self.db.refresh(new_vendor)
-                registration_results_text = f"\n\n✅ Excellent! Your vendor profile *{v_name}* has been successfully registered.\n\n*Your Vendor ID for the Dashboard is:*\n`{new_vendor.id}`\n\nPlease save this ID to log into your Dashboard."
+
+                # Build success message with virtual account details
+                if va_number:
+                    registration_results_text = (
+                        f"\n\n✅ Excellent! Your vendor profile *{v_name}* has been successfully registered!"
+                        f"\n\n🏦 *Your Dedicated Payment Account:*"
+                        f"\n━━━━━━━━━━━━━━━━━━"
+                        f"\n🏛️ Bank: *Providus Bank*"
+                        f"\n💳 Account Number: *{va_number}*"
+                        f"\n👤 Account Name: *{v_name}*"
+                        f"\n━━━━━━━━━━━━━━━━━━"
+                        f"\n\nCustomers can transfer payment directly to this account and your balance will be updated automatically!"
+                        f"\n\n*Your Vendor ID:* `{new_vendor.id}`"
+                    )
+                else:
+                    registration_results_text = (
+                        f"\n\n✅ Excellent! Your vendor profile *{v_name}* has been successfully registered."
+                        f"\n\n⚠️ We could not provision your payment account right now. Please contact support."
+                        f"\n\n*Your Vendor ID:* `{new_vendor.id}`"
+                    )
+
             except Exception as e:
                 registration_results_text = "\n\n❌ Sorry, there was an error registering your vendor profile."
                 
@@ -513,30 +741,7 @@ class ConversationService:
             )
 
         if show_menu_match:
-            sections = [
-                {
-                    "title": "Customer Services",
-                    "rows": [
-                        {"id": "FIND_DISPATCH", "title": "Find Dispatch Rider"},
-                        {"id": "FIND_VENDOR", "title": "Find Vendor"}
-                    ]
-                },
-                {
-                    "title": "Vendor / Rider Hub",
-                    "rows": [
-                        {"id": "REGISTER_VENDOR", "title": "Register Vendor"},
-                        {"id": "REGISTER_RIDER", "title": "Register Dispatch Rider"}
-                    ]
-                },
-                {
-                    "title": "Support",
-                    "rows": [
-                        {"id": "SPEAK_HUMAN", "title": "Speak to Human"}
-                    ]
-                }
-            ]
-            await self.whatsapp_client.send_interactive_list(to=phone_number, text="How can I help you today? Please choose an option below:", button_text="Main Menu", sections=sections)
-
+            await self.send_main_menu(phone_number)
         # 9. Execute Actions
         if escalate_match:
             await self.escalation.escalate_to_human(conversation.id, phone_number)

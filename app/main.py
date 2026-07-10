@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.webhooks import router as webhooks_router
+from app.api.posteering_webhooks import router as posteering_webhooks_router
 from app.api.admin import router as admin_router
 from app.api.vendor import router as vendor_router
 from app.core.celery_app import celery_app
@@ -33,6 +34,7 @@ async def startup_event():
         print(f"Warning: Could not create database tables: {e}")
 
 app.include_router(webhooks_router, prefix="/api/v1/webhooks", tags=["webhooks"])
+app.include_router(posteering_webhooks_router, prefix="/api/v1/posteering", tags=["posteering"])
 app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
 app.include_router(vendor_router, prefix="/api/v1/vendor", tags=["vendor"])
 
