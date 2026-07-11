@@ -351,7 +351,7 @@ class PosteeringClient:
 
 # Singleton instance
 posteering_client = PosteeringClient(
-    key_id=settings.POSTEERING_API_KEY,
+    key_id=settings.POSTEERING_KEY_ID,
     secret=settings.POSTEERING_API_SECRET,
     context=settings.POSTEERING_CONTEXT_ID,
 )

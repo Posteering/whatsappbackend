@@ -1,57 +1,55 @@
-import asyncio
+import argparse
 import sys
-sys.path.insert(0, ".")
-from app.database.session import SessionLocal
-from app.models.commerce import Order, Vendor
-from app.models.user import User
-from app.whatsapp.client import WhatsAppClient
+import os
 
-async def simulate_payment():
-    print("Looking for the most recent accepted order...")
-    db = SessionLocal()
+# Ensure the app package is in the path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from app.services.posteering_client import posteering_client
+
+def simulate_credit(virtual_account: str, amount_kobo: int, narration: str = "test payment"):
+    print(f"Simulating BankRail credit...")
+    print(f"  Virtual Account: {virtual_account}")
+    print(f"  Amount (kobo):   {amount_kobo} (₦{amount_kobo / 100:,.2f})")
+    print(f"  Narration:       {narration}\n")
     
-    # Find the latest order that is waiting for payment (vendor_status = 'accepted', status = 'pending')
-    order = db.query(Order).filter(
-        Order.vendor_status == "accepted",
-        Order.status == "pending"
-    ).order_by(Order.created_at.desc()).first()
-
-    if not order:
-        print("❌ No accepted orders found waiting for payment.")
-        db.close()
-        return
-
-    print(f"Found Order: #{str(order.id)[:8]} (Total: NGN {order.total_amount})")
-    print("Marking order as PAID...")
+    path = "/api/v1/one/products/bankrail-gateway/passthrough/sandbox/simulate-credit"
+    payload = {
+        "virtualAccount": virtual_account,
+        "amountKobo": amount_kobo,
+        "narration": narration
+    }
     
-    order.status = "paid"
-    db.commit()
-
-    customer = db.query(User).filter(User.id == order.user_id).first()
-    vendor = db.query(Vendor).filter(Vendor.id == order.vendor_id).first()
-
-    wa_client = WhatsAppClient()
-
-    # Notify Customer
-    if customer:
-        print(f"Notifying Customer ({customer.phone_number})...")
-        await wa_client.send_text_message(
-            to=customer.phone_number,
-            text=f"✅ *Payment Successful!*\nYour payment of ₦{order.total_amount:,.2f} for Order #{str(order.id)[:8]} has been securely held in escrow.\n\nThe vendor is now processing your order."
-        )
-
-    # Notify Vendor
-    if vendor:
-        print(f"Notifying Vendor ({vendor.contact_phone})...")
-        await wa_client.send_text_message(
-            to=vendor.contact_phone,
-            text=f"💸 *Payment Received!*\nThe customer has successfully paid ₦{order.total_amount:,.2f} for Order #{str(order.id)[:8]}.\n\nPlease prepare the order and click *Complete Order* when it is ready or dispatched.",
-            # We can optionally send an interactive button to complete the order here, 
-            # but they can also do it from the Vendor Dashboard menu.
-        )
-
-    print("✅ Payment simulation complete!")
-    db.close()
+    try:
+        response = posteering_client.post(path, json_data=payload)
+        
+        print(f"HTTP Status: {response.status_code}")
+        
+        try:
+            print("Response JSON:")
+            import json
+            print(json.dumps(response.json(), indent=2))
+        except Exception:
+            print("Response Text:")
+            print(response.text)
+            
+        if response.ok:
+            print("\n✅ Simulation successful! The Posteering webhook should fire shortly.")
+        else:
+            print("\n❌ Simulation failed.")
+            
+    except Exception as e:
+        print(f"\n❌ Error during simulation: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(simulate_payment())
+    parser = argparse.ArgumentParser(description="Simulate a BankRail credit payment in sandbox.")
+    parser.add_argument("virtual_account", help="The 10-digit virtual account number to credit")
+    parser.add_argument("amount", type=float, help="The amount to credit (in Naira). E.g. 16600 for N16,600")
+    parser.add_argument("--narration", default="test payment", help="Optional narration text")
+    
+    args = parser.parse_args()
+    
+    # Convert Naira to Kobo
+    amount_kobo = int(args.amount * 100)
+    
+    simulate_credit(args.virtual_account, amount_kobo, args.narration)
