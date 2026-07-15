@@ -1,20 +1,20 @@
-"""Initial schema
+"""initial_schema_v2
 
-Revision ID: ee1d691441fa
+Revision ID: 47e4821fa1f3
 Revises: 
-Create Date: 2026-07-06 10:25:15.536069
+Create Date: 2026-07-15 12:10:36.338558
 
 """
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-import pgvector.sqlalchemy
+import pgvector
 
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = 'ee1d691441fa'
+revision: str = '47e4821fa1f3'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -35,25 +35,6 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_dispatch_riders_current_location'), 'dispatch_riders', ['current_location'], unique=False)
     op.create_index(op.f('ix_dispatch_riders_id'), 'dispatch_riders', ['id'], unique=False)
-    op.create_table('users',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('phone_number', sa.String(), nullable=False),
-    sa.Column('name', sa.String(), nullable=True),
-    sa.Column('is_active', sa.Boolean(), nullable=False),
-    sa.Column('is_admin', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_users_phone_number'), 'users', ['phone_number'], unique=True)
-    op.create_table('vendor_classes',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('name', sa.String(), nullable=False),
-    sa.Column('description', sa.Text(), nullable=True),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_vendor_classes_id'), 'vendor_classes', ['id'], unique=False)
-    op.create_index(op.f('ix_vendor_classes_name'), 'vendor_classes', ['name'], unique=True)
     op.create_table('ai_memories',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('user_id', sa.UUID(), nullable=False),
@@ -105,32 +86,6 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('user_id')
     )
-    op.create_table('vendors',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('name', sa.String(), nullable=False),
-    sa.Column('class_id', sa.UUID(), nullable=True),
-    sa.Column('location', sa.String(), nullable=False),
-    sa.Column('contact_phone', sa.String(), nullable=False),
-    sa.Column('description', sa.Text(), nullable=True),
-    sa.Column('rating', sa.Float(), nullable=True),
-    sa.ForeignKeyConstraint(['class_id'], ['vendor_classes.id'], ),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_vendors_id'), 'vendors', ['id'], unique=False)
-    op.create_index(op.f('ix_vendors_name'), 'vendors', ['name'], unique=False)
-    op.create_table('menu_items',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('vendor_id', sa.UUID(), nullable=False),
-    sa.Column('name', sa.String(), nullable=False),
-    sa.Column('description', sa.Text(), nullable=True),
-    sa.Column('price', sa.Float(), nullable=False),
-    sa.Column('image_url', sa.String(), nullable=True),
-    sa.Column('is_available', sa.Boolean(), nullable=True),
-    sa.ForeignKeyConstraint(['vendor_id'], ['vendors.id'], ),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_menu_items_id'), 'menu_items', ['id'], unique=False)
-    op.create_index(op.f('ix_menu_items_name'), 'menu_items', ['name'], unique=False)
     op.create_table('messages',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('conversation_id', sa.UUID(), nullable=False),
@@ -146,23 +101,11 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_messages_conversation_id'), 'messages', ['conversation_id'], unique=False)
     op.create_index(op.f('ix_messages_whatsapp_message_id'), 'messages', ['whatsapp_message_id'], unique=True)
-    op.create_table('orders',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('user_id', sa.UUID(), nullable=False),
-    sa.Column('vendor_id', sa.UUID(), nullable=False),
-    sa.Column('status', sa.String(), nullable=True),
-    sa.Column('vendor_status', sa.String(), nullable=True),
-    sa.Column('total_amount', sa.Float(), nullable=False),
-    sa.Column('created_at', sa.DateTime(), nullable=True),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
-    sa.ForeignKeyConstraint(['vendor_id'], ['vendors.id'], ),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_orders_id'), 'orders', ['id'], unique=False)
     op.create_table('payments',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('user_id', sa.UUID(), nullable=False),
     sa.Column('conversation_id', sa.UUID(), nullable=True),
+    sa.Column('order_id', sa.UUID(), nullable=True),
     sa.Column('amount', sa.Float(), nullable=False),
     sa.Column('currency', sa.String(), nullable=False),
     sa.Column('status', sa.String(), nullable=False),
@@ -171,76 +114,55 @@ def upgrade() -> None:
     sa.Column('provider_reference', sa.String(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['conversation_id'], ['conversations.id'], ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['order_id'], ['orders.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_index(op.f('ix_payments_order_id'), 'payments', ['order_id'], unique=False)
     op.create_index(op.f('ix_payments_user_id'), 'payments', ['user_id'], unique=False)
-    op.create_table('cart_items',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('cart_id', sa.UUID(), nullable=False),
-    sa.Column('menu_item_id', sa.UUID(), nullable=False),
-    sa.Column('quantity', sa.Integer(), nullable=True),
-    sa.ForeignKeyConstraint(['cart_id'], ['carts.id'], ),
-    sa.ForeignKeyConstraint(['menu_item_id'], ['menu_items.id'], ),
-    sa.PrimaryKeyConstraint('id')
-    )
+    op.drop_table('cart')
     op.create_index(op.f('ix_cart_items_id'), 'cart_items', ['id'], unique=False)
-    op.create_table('invoices',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('order_id', sa.UUID(), nullable=False),
-    sa.Column('invoice_number', sa.String(), nullable=False),
-    sa.Column('amount', sa.Float(), nullable=False),
-    sa.Column('status', sa.String(), nullable=True),
-    sa.Column('created_at', sa.DateTime(), nullable=True),
-    sa.ForeignKeyConstraint(['order_id'], ['orders.id'], ),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('invoice_number')
-    )
+    op.drop_constraint(op.f('cart_items_cart_id_fkey'), 'cart_items', type_='foreignkey')
+    op.create_foreign_key(None, 'cart_items', 'carts', ['cart_id'], ['id'])
     op.create_index(op.f('ix_invoices_id'), 'invoices', ['id'], unique=False)
-    op.create_table('order_items',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('order_id', sa.UUID(), nullable=False),
-    sa.Column('menu_item_id', sa.UUID(), nullable=False),
-    sa.Column('quantity', sa.Integer(), nullable=True),
-    sa.Column('price_at_purchase', sa.Float(), nullable=False),
-    sa.ForeignKeyConstraint(['menu_item_id'], ['menu_items.id'], ),
-    sa.ForeignKeyConstraint(['order_id'], ['orders.id'], ),
-    sa.PrimaryKeyConstraint('id')
-    )
+    op.add_column('menu_items', sa.Column('image_url', sa.String(), nullable=True))
+    op.create_index(op.f('ix_menu_items_id'), 'menu_items', ['id'], unique=False)
+    op.create_index(op.f('ix_menu_items_name'), 'menu_items', ['name'], unique=False)
     op.create_index(op.f('ix_order_items_id'), 'order_items', ['id'], unique=False)
-    op.create_table('order_status_updates',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('order_id', sa.UUID(), nullable=False),
-    sa.Column('status', sa.String(), nullable=False),
-    sa.Column('note', sa.Text(), nullable=True),
-    sa.Column('updated_at', sa.DateTime(), nullable=True),
-    sa.ForeignKeyConstraint(['order_id'], ['orders.id'], ),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_order_status_updates_id'), 'order_status_updates', ['id'], unique=False)
-    op.create_table('order_payments',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('invoice_id', sa.UUID(), nullable=False),
-    sa.Column('amount_paid', sa.Float(), nullable=False),
-    sa.Column('payment_method', sa.String(), nullable=False),
-    sa.Column('transaction_ref', sa.String(), nullable=False),
-    sa.Column('paid_at', sa.DateTime(), nullable=True),
-    sa.ForeignKeyConstraint(['invoice_id'], ['invoices.id'], ),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('transaction_ref')
-    )
     op.create_index(op.f('ix_order_payments_id'), 'order_payments', ['id'], unique=False)
-    op.create_table('virtual_accounts',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('invoice_id', sa.UUID(), nullable=False),
-    sa.Column('bank_name', sa.String(), nullable=False),
-    sa.Column('account_number', sa.String(), nullable=False),
-    sa.Column('account_name', sa.String(), nullable=False),
-    sa.Column('expires_at', sa.DateTime(), nullable=False),
-    sa.Column('status', sa.String(), nullable=True),
-    sa.ForeignKeyConstraint(['invoice_id'], ['invoices.id'], ),
-    sa.PrimaryKeyConstraint('id')
-    )
+    op.create_index(op.f('ix_order_status_updates_id'), 'order_status_updates', ['id'], unique=False)
+    op.add_column('orders', sa.Column('vendor_status', sa.String(), nullable=True))
+    op.create_index(op.f('ix_orders_id'), 'orders', ['id'], unique=False)
+    op.alter_column('users', 'phone_number',
+               existing_type=sa.VARCHAR(),
+               nullable=False)
+    op.alter_column('users', 'is_active',
+               existing_type=sa.BOOLEAN(),
+               nullable=False)
+    op.alter_column('users', 'is_admin',
+               existing_type=sa.BOOLEAN(),
+               nullable=False)
+    op.alter_column('users', 'created_at',
+               existing_type=postgresql.TIMESTAMP(timezone=True),
+               nullable=False)
+    op.alter_column('users', 'updated_at',
+               existing_type=postgresql.TIMESTAMP(timezone=True),
+               nullable=False)
+    op.create_index(op.f('ix_users_phone_number'), 'users', ['phone_number'], unique=True)
+    op.drop_constraint(op.f('vendor_classes_name_key'), 'vendor_classes', type_='unique')
+    op.create_index(op.f('ix_vendor_classes_id'), 'vendor_classes', ['id'], unique=False)
+    op.create_index(op.f('ix_vendor_classes_name'), 'vendor_classes', ['name'], unique=True)
+    op.add_column('vendors', sa.Column('ledger_account_id', sa.String(), nullable=True))
+    op.add_column('vendors', sa.Column('virtual_account_number', sa.String(), nullable=True))
+    op.add_column('vendors', sa.Column('virtual_account_bank', sa.String(), nullable=True))
+    op.add_column('vendors', sa.Column('virtual_account_bank_code', sa.String(), nullable=True))
+    op.add_column('vendors', sa.Column('virtual_account_provider', sa.String(), nullable=True))
+    op.add_column('vendors', sa.Column('virtual_account_tracking_id', sa.String(), nullable=True))
+    op.drop_constraint(op.f('vendors_email_key'), 'vendors', type_='unique')
+    op.create_index(op.f('ix_vendors_id'), 'vendors', ['id'], unique=False)
+    op.create_index(op.f('ix_vendors_name'), 'vendors', ['name'], unique=False)
+    op.drop_column('vendors', 'password_hash')
+    op.drop_column('vendors', 'email')
     op.create_index(op.f('ix_virtual_accounts_id'), 'virtual_accounts', ['id'], unique=False)
     # ### end Alembic commands ###
 
@@ -249,30 +171,61 @@ def downgrade() -> None:
     """Downgrade schema."""
     # ### commands auto generated by Alembic - please adjust! ###
     op.drop_index(op.f('ix_virtual_accounts_id'), table_name='virtual_accounts')
-    op.drop_table('virtual_accounts')
-    op.drop_index(op.f('ix_order_payments_id'), table_name='order_payments')
-    op.drop_table('order_payments')
-    op.drop_index(op.f('ix_order_status_updates_id'), table_name='order_status_updates')
-    op.drop_table('order_status_updates')
-    op.drop_index(op.f('ix_order_items_id'), table_name='order_items')
-    op.drop_table('order_items')
-    op.drop_index(op.f('ix_invoices_id'), table_name='invoices')
-    op.drop_table('invoices')
-    op.drop_index(op.f('ix_cart_items_id'), table_name='cart_items')
-    op.drop_table('cart_items')
-    op.drop_index(op.f('ix_payments_user_id'), table_name='payments')
-    op.drop_table('payments')
+    op.add_column('vendors', sa.Column('email', sa.TEXT(), autoincrement=False, nullable=True))
+    op.add_column('vendors', sa.Column('password_hash', sa.TEXT(), autoincrement=False, nullable=True))
+    op.drop_index(op.f('ix_vendors_name'), table_name='vendors')
+    op.drop_index(op.f('ix_vendors_id'), table_name='vendors')
+    op.create_unique_constraint(op.f('vendors_email_key'), 'vendors', ['email'], postgresql_nulls_not_distinct=False)
+    op.drop_column('vendors', 'virtual_account_tracking_id')
+    op.drop_column('vendors', 'virtual_account_provider')
+    op.drop_column('vendors', 'virtual_account_bank_code')
+    op.drop_column('vendors', 'virtual_account_bank')
+    op.drop_column('vendors', 'virtual_account_number')
+    op.drop_column('vendors', 'ledger_account_id')
+    op.drop_index(op.f('ix_vendor_classes_name'), table_name='vendor_classes')
+    op.drop_index(op.f('ix_vendor_classes_id'), table_name='vendor_classes')
+    op.create_unique_constraint(op.f('vendor_classes_name_key'), 'vendor_classes', ['name'], postgresql_nulls_not_distinct=False)
+    op.drop_index(op.f('ix_users_phone_number'), table_name='users')
+    op.alter_column('users', 'updated_at',
+               existing_type=postgresql.TIMESTAMP(timezone=True),
+               nullable=True)
+    op.alter_column('users', 'created_at',
+               existing_type=postgresql.TIMESTAMP(timezone=True),
+               nullable=True)
+    op.alter_column('users', 'is_admin',
+               existing_type=sa.BOOLEAN(),
+               nullable=True)
+    op.alter_column('users', 'is_active',
+               existing_type=sa.BOOLEAN(),
+               nullable=True)
+    op.alter_column('users', 'phone_number',
+               existing_type=sa.VARCHAR(),
+               nullable=True)
     op.drop_index(op.f('ix_orders_id'), table_name='orders')
-    op.drop_table('orders')
+    op.drop_column('orders', 'vendor_status')
+    op.drop_index(op.f('ix_order_status_updates_id'), table_name='order_status_updates')
+    op.drop_index(op.f('ix_order_payments_id'), table_name='order_payments')
+    op.drop_index(op.f('ix_order_items_id'), table_name='order_items')
+    op.drop_index(op.f('ix_menu_items_name'), table_name='menu_items')
+    op.drop_index(op.f('ix_menu_items_id'), table_name='menu_items')
+    op.drop_column('menu_items', 'image_url')
+    op.drop_index(op.f('ix_invoices_id'), table_name='invoices')
+    op.drop_constraint(None, 'cart_items', type_='foreignkey')
+    op.create_foreign_key(op.f('cart_items_cart_id_fkey'), 'cart_items', 'cart', ['cart_id'], ['id'])
+    op.drop_index(op.f('ix_cart_items_id'), table_name='cart_items')
+    op.create_table('cart',
+    sa.Column('id', sa.UUID(), autoincrement=False, nullable=False),
+    sa.Column('user_id', sa.UUID(), autoincrement=False, nullable=False),
+    sa.Column('status', sa.VARCHAR(), autoincrement=False, nullable=True),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('cart_user_id_fkey')),
+    sa.PrimaryKeyConstraint('id', name=op.f('cart_pkey'))
+    )
+    op.drop_index(op.f('ix_payments_user_id'), table_name='payments')
+    op.drop_index(op.f('ix_payments_order_id'), table_name='payments')
+    op.drop_table('payments')
     op.drop_index(op.f('ix_messages_whatsapp_message_id'), table_name='messages')
     op.drop_index(op.f('ix_messages_conversation_id'), table_name='messages')
     op.drop_table('messages')
-    op.drop_index(op.f('ix_menu_items_name'), table_name='menu_items')
-    op.drop_index(op.f('ix_menu_items_id'), table_name='menu_items')
-    op.drop_table('menu_items')
-    op.drop_index(op.f('ix_vendors_name'), table_name='vendors')
-    op.drop_index(op.f('ix_vendors_id'), table_name='vendors')
-    op.drop_table('vendors')
     op.drop_table('settings')
     op.drop_index(op.f('ix_conversations_user_id'), table_name='conversations')
     op.drop_table('conversations')
@@ -283,11 +236,6 @@ def downgrade() -> None:
     op.drop_table('analytics')
     op.drop_index(op.f('ix_ai_memories_user_id'), table_name='ai_memories')
     op.drop_table('ai_memories')
-    op.drop_index(op.f('ix_vendor_classes_name'), table_name='vendor_classes')
-    op.drop_index(op.f('ix_vendor_classes_id'), table_name='vendor_classes')
-    op.drop_table('vendor_classes')
-    op.drop_index(op.f('ix_users_phone_number'), table_name='users')
-    op.drop_table('users')
     op.drop_index(op.f('ix_dispatch_riders_id'), table_name='dispatch_riders')
     op.drop_index(op.f('ix_dispatch_riders_current_location'), table_name='dispatch_riders')
     op.drop_table('dispatch_riders')
