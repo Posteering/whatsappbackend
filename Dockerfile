@@ -19,6 +19,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-COPY supervisord.conf /etc/supervisor/conf.d/app.conf
+RUN chmod +x start.sh
 
-CMD ["supervisord", "-c", "/etc/supervisor/conf.d/app.conf"]
+CMD ["./start.sh"]
