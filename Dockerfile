@@ -10,7 +10,6 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
-    supervisor \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -19,6 +18,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN chmod +x start.sh
+RUN sed -i 's/\r$//' start.sh && chmod +x start.sh
 
-CMD ["./start.sh"]
+CMD ["/bin/bash", "start.sh"]
