@@ -1,5 +1,9 @@
+[build]
+builder = "dockerfile"
+
 [deploy]
+startCommand = "celery -A app.core.celery_app worker --loglevel=info --concurrency=2 & celery -A app.core.celery_app beat --loglevel=info & exec uvicorn app.main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/"
-healthcheckTimeout = 60
+healthcheckTimeout = 120
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
